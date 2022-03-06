@@ -1,0 +1,223 @@
+#include <PID_v1.h> //PID, servo ve sensör kütüphaneleri
+#include <Servo.h>
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
+#define CE_PIN   9
+#define CSN_PIN 10
+
+double yVal;
+double xVal;
+
+double xValback;
+double yValback;
+int notouch;
+
+double startX = 82;     // BAŞLANGIÇ AÇISAL OLARAK BAŞLANGIÇ NOKTALARI TANIMLANDI
+double startY = 75;
+const byte cornerPins[] = {2, 3, 4, 5};
+const int sense = A0;
+
+int xVal_Nrf, yVal_Nrf;
+char cstr1[10];
+char cstr2[10];
+
+const byte slaveAddress[5] = {'R','x','A','A','A'};
+
+RF24 radio(CE_PIN, CSN_PIN); 
+
+// PID values
+double SetpointX, InputX, OutputX; //for X
+double SetpointY, InputY, OutputY; //for Y
+
+// servos variables
+Servo servoX; //X axis
+Servo servoY; //Y axis
+
+/////TIME SAMPLE
+int Ts = 15;
+//PID const
+float KpX = 0.25; //PID x ekseni değerleri
+float KiX = 0.001;
+float KdX = 0.04;
+
+float KpY = 0.25; //PID y ekseni değerleri
+float KiY = 0.001;
+float KdY = 0.04;
+
+double Xoutput, Youtput; //Servo outputları
+//INIT PID
+PID myPIDX(&InputX, &OutputX, &SetpointX, KpX, KiX, KdX, DIRECT);
+PID myPIDY(&InputY, &OutputY, &SetpointY, KpY, KiY, KdY, DIRECT);
+
+
+void setup() {
+
+  Serial.begin(9600);
+  
+  for (int i = 0; i < 4; i++) {
+    pinMode(cornerPins[i], OUTPUT);
+  }
+
+
+  radio.begin();
+  radio.setDataRate( RF24_250KBPS );
+  radio.setRetries(3,5); // delay, count
+  radio.openWritingPipe(slaveAddress);
+
+
+  //Int Setpoint
+  SetpointX = 0;                    // TOPUN DOKUNMATİK EKRANDA DENGELEMEYE ÇALIŞTIĞI YER
+  SetpointY = 0;
+
+  servoX.attach(6);                  // SERVO MOTORUN ARDUİNODA BAĞLI OLDUĞU PİN
+  servoY.attach(7);
+
+  servoX.write(startX);                    //SERVOLARA BAŞLANGIÇ NOKTASI TANIMLANDI
+  servoY.write(startY);
+
+
+
+  myPIDX.SetMode(AUTOMATIC);             // PIDX kontrolörümüzü açıyoruz.
+  myPIDX.SetOutputLimits(-45, 45);        //TOUCH SCREENDE PID LIMIT ARALIĞI TANIMLANDI
+  myPIDY.SetMode(AUTOMATIC);             // PIDY kontrolörümüzü açıyoruz.
+  myPIDY.SetOutputLimits(-55, 60);
+
+  // TIME SAMPLE
+  myPIDX.SetSampleTime(Ts);
+  myPIDY.SetSampleTime(Ts);
+  /////
+  delay(10);
+  ///
+}
+
+void loop() {
+
+
+  xValback=xVal;
+
+  yValback=yVal;
+  delay(10);
+  
+  digitalWrite(cornerPins[0], HIGH);
+  digitalWrite(cornerPins[1], LOW);
+  digitalWrite(cornerPins[2], LOW);
+  digitalWrite(cornerPins[3], HIGH);
+
+  delay(10);
+
+  digitalWrite(cornerPins[0], HIGH);
+  digitalWrite(cornerPins[1], LOW);
+  digitalWrite(cornerPins[2], LOW);
+  digitalWrite(cornerPins[3], HIGH);
+  xVal = analogRead(sense);
+  xVal_Nrf = analogRead(sense);
+  xVal = map(xVal, 290, 730, -160, 160);
+  xVal_Nrf = map(xVal_Nrf, 290, 730, -198, 198);
+  delay(10);
+  
+  digitalWrite(cornerPins[0], LOW);
+  digitalWrite(cornerPins[1], LOW);
+  digitalWrite(cornerPins[2], HIGH);
+  digitalWrite(cornerPins[3], HIGH);
+
+  delay(10);
+  InputX = xVal; // X koordinatını oku
+
+  digitalWrite(cornerPins[0], LOW);
+  digitalWrite(cornerPins[1], LOW);
+  digitalWrite(cornerPins[2], HIGH);
+  digitalWrite(cornerPins[3], HIGH);
+
+  yVal_Nrf = analogRead(sense); // 
+  yVal = analogRead(sense); // Y koordinatını oku
+  yVal_Nrf = map(yVal_Nrf, 290, 730, -161, 161);
+  yVal = map(yVal, 290, 730, -160, 160);
+
+  InputY = yVal; // X koordinatını oku
+
+  myPIDX.Compute(); //action control X compute    // X koordinatını hesapla
+  myPIDY.Compute(); // action control Y compute   // Y koordinatını hesapla
+
+  Xoutput =  startX + OutputX;                     // OutputX , OutputY tanımları: PID den servoya "buraya git" komutu
+  Youtput =  startY + OutputY;
+  // Xoutput , Youtput u şöyle tanımladık: Servoların başlangıç noktalarından pid nin gönderdiği output değerlerini çıkararak oluşturduk.
+
+
+ itoa(xVal_Nrf, cstr1, 10);
+ itoa(yVal_Nrf, cstr2, 10);
+ strcat(cstr1 , ",");
+ strcat(cstr1 , cstr2);
+
+radio.write( &cstr1, sizeof(cstr1) );
+
+
+
+// Top platformun üstünde değilse platformun düz durmasını sağlayan kısım
+if( (xValback<=xVal+10 && xValback>=xVal-10) && (yValback<=yVal+10 && yValback>=yVal-10) )
+{
+notouch=notouch+1;
+}
+else
+{
+notouch=0;
+
+  servoX.attach(6);
+  servoY.attach(7);
+
+}
+
+
+if(notouch>=20)
+{
+
+if( (xVal<=SetpointX+50 && xVal>=SetpointX-50) && (yVal<=SetpointY+50 && yVal>=SetpointY-50) )
+{
+
+notouch=0;
+
+}
+
+else{
+
+    servoX.write(startX);
+    servoY.write(startY);
+
+    delay(100);
+    servoX.detach();
+    servoY.detach();
+    notouch=0;
+    
+}
+ 
+}
+
+
+
+   servoX.write(Xoutput);                          //control
+   servoY.write(Youtput);  
+
+
+
+/*
+  Serial.println("-------------");
+  Serial.print(xVal);
+  Serial.print(",");
+  Serial.println(yVal);
+
+  Serial.print(OutputX);
+  Serial.print(",");
+  Serial.println(OutputY);
+
+  Serial.print(Xoutput);
+  Serial.print(",");
+  Serial.println(Youtput);
+
+  Serial.print(InputX);
+  Serial.print(",");
+  Serial.println(InputY);
+  Serial.println(notouch);
+*/
+
+}
